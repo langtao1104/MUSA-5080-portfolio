@@ -6,7 +6,7 @@ date: 2026-08-28
 
 ## What We Did
 
-<!-- CHANGE THIS: replace with your own notes -->
+I hope to learn how to use R and spatial data analysis more effectively in this course. I want to develop practical skills that I can apply to urban planning projects. I am a little nervous about coding because I do not have much experience with it, but I hope to become more comfortable with practice.
 
 Set up the portfolio workflow: made a repository from a template, cloned it with
 GitHub Desktop, edited files in RStudio, rendered with Quarto, and published to
