@@ -35,11 +35,11 @@ sessionInfo()$R.version$version.string
 
 <!-- CHANGE THIS: 3-4 sentences -->
 
-What I want out of this course:
+What I want out of this course: I hope I can study some advanced spatial analysis and data science. I hope I can find some like-minded classmates.
 
-One thing I'm nervous about:
+One thing I'm nervous about:I didn't study data science and spatial analysis before this course. 
 
 ## Questions I Still Have
-
+What should students with limited experience in data science and spatial analysis focus on to succeed in this course?
 -
 -
