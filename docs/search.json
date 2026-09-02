@@ -4,14 +4,14 @@
     "href": "index.html",
     "title": "Home",
     "section": "",
-    "text": "Welcome to my portfolio for MUSA 5080: Public Policy Analytics at the University of Pennsylvania.\nThis site documents my work in the Master of Urban Spatial Analytics program — weekly notes, course assignments, and a final project applying data analysis to urban policy questions.\n\n\n\nI’m a student in the MUSA program at Penn. My background is in [YOUR BACKGROUND], and I’m interested in [YOUR INTERESTS].\n\n\n\n\nWeekly Notes — what I’m learning each week\nAssignments — analyses completed for the course\nAbout — more background and how to reach me\n\n\n\n\n\n\nEmail: your-email@upenn.edu\nGitHub: @your-username"
+    "text": "Welcome to my portfolio for MUSA 5080: Public Policy Analytics at the University of Pennsylvania.\nThis site documents my work in the Master of Urban Spatial Analytics program — weekly notes, course assignments, and a final project applying data analysis to urban policy questions.\n\n\n\nI’m a student in the MUSA program at Penn. My background is Finance at OSU, and I’m interested in data science.\n\n\n\n\nWeekly Notes — what I’m learning each week\nAssignments — analyses completed for the course\nAbout — more background and how to reach me\n\n\n\n\n\n\nEmail: your-email@upenn.edu\nGitHub: @your-username"
   },
   {
     "objectID": "index.html#about-me",
     "href": "index.html#about-me",
     "title": "Home",
     "section": "",
-    "text": "I’m a student in the MUSA program at Penn. My background is in [YOUR BACKGROUND], and I’m interested in [YOUR INTERESTS]."
+    "text": "I’m a student in the MUSA program at Penn. My background is Finance at OSU, and I’m interested in data science."
   },
   {
     "objectID": "index.html#what-youll-find-here",
@@ -60,7 +60,7 @@
     "href": "weekly-notes/week-01.html#reflection",
     "title": "Week 1: Getting Set Up",
     "section": "Reflection",
-    "text": "Reflection\n\nWhat I want out of this course:\nOne thing I’m nervous about:"
+    "text": "Reflection\n\nWhat I want out of this course: I hope I can study some advanced spatial analysis and data science. I hope I can find some like-minded classmates.\nOne thing I’m nervous about:I didn’t study data science and spatial analysis before this course."
   },
   {
     "objectID": "weekly-notes/week-01.html#questions-i-still-have",
@@ -72,30 +72,30 @@
   {
     "objectID": "about.html",
     "href": "about.html",
-    "title": "About",
+    "title": "About Me",
     "section": "",
-    "text": "Write a few paragraphs about yourself here: where you came from before MUSA, what drew you to urban spatial analytics, and what you’re hoping to do with it."
+    "text": "Before joining MUSA, I studied Finance at Ohio State University. I became interested in urban spatial analytics because I want to better understand cities through data. Through MUSA, I hope to develop skills in data science and spatial analysis and apply them to real-world urban problems."
   },
   {
     "objectID": "about.html#background",
     "href": "about.html#background",
-    "title": "About",
+    "title": "About Me",
     "section": "",
-    "text": "Write a few paragraphs about yourself here: where you came from before MUSA, what drew you to urban spatial analytics, and what you’re hoping to do with it."
+    "text": "Before joining MUSA, I studied Finance at Ohio State University. I became interested in urban spatial analytics because I want to better understand cities through data. Through MUSA, I hope to develop skills in data science and spatial analysis and apply them to real-world urban problems."
   },
   {
     "objectID": "about.html#skills",
     "href": "about.html#skills",
-    "title": "About",
+    "title": "About Me",
     "section": "Skills",
     "text": "Skills\n\n\nLanguages & Tools: R, Quarto, Git\nSpatial: (add as you learn)\nData: US Census / ACS via tidycensus"
   },
   {
     "objectID": "about.html#contact",
     "href": "about.html#contact",
-    "title": "About",
+    "title": "About Me",
     "section": "Contact",
-    "text": "Contact\n\n\nEmail: your-email@upenn.edu\nGitHub: @your-username"
+    "text": "Contact\n\n\nEmail: langtao@upenn.edu\nGitHub: langtao1104"
   },
   {
     "objectID": "assignments/index.html",
@@ -117,5 +117,12 @@
     "title": "",
     "section": "",
     "text": "Code\n\n\n\n\nData files for MUSA 5080\nDownload assignment data from Canvas and save it here. Do not rename the files! Have a nice day :)"
+  },
+  {
+    "objectID": "weekly-notes/week-01.html#what-should-students-with-limited-experience-in-data-science-and-spatial-analysis-focus-on-to-succeed-in-this-course",
+    "href": "weekly-notes/week-01.html#what-should-students-with-limited-experience-in-data-science-and-spatial-analysis-focus-on-to-succeed-in-this-course",
+    "title": "Week 1: Getting Set Up",
+    "section": "What should students with limited experience in data science and spatial analysis focus on to succeed in this course?",
+    "text": "What should students with limited experience in data science and spatial analysis focus on to succeed in this course?"
   }
 ]
