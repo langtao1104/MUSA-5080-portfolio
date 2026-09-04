@@ -1,0 +1,24 @@
+---
+title: "Week 2: dplyr and Census"
+description: "table function and acs data"
+date: 2026-09-24
+---
+
+## What We Did
+
+First, we had a quit. It was a little scary, but now I'm not scared anymore.
+
+## Key Concepts
+
+The loop: **Edit → Save → Render → Commit → Push → wait → refresh**
+
+## Reflection
+
+<!-- CHANGE THIS: 3-4 sentences -->
+
+
+
+
+## Questions I Still Have
+
+
