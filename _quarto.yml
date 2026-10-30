@@ -3,11 +3,11 @@ project:
   output-dir: docs
   execute-dir: project
   render:
-    - "**/*"
+    - "**/*.qmd"
     - "!Practice/**"
 
 website:
-  title: "Lang Tao - MUSA 5080 Portfolio"        # <-- CHANGE THIS
+  title: "Lang Tao - MUSA 5080 Portfolio"
   description: "Public Policy Analytics portfolio"
   navbar:
     title: "Portfolio"
@@ -22,7 +22,7 @@ website:
         text: "Assignments"
     right:
       - icon: github
-        href: https://github.com/YOUR-USERNAME-HERE/MUSA-5080-portfolio      # <-- CHANGE THIS
+        href: https://github.com/langtao1104/MUSA-5080-portfolio
 
 format:
   html:
