@@ -2,6 +2,9 @@ project:
   type: website
   output-dir: docs
   execute-dir: project
+  render:
+    - "**/*"
+    - "!Practice/**"
 
 website:
   title: "Lang Tao - MUSA 5080 Portfolio"        # <-- CHANGE THIS

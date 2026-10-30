@@ -1,0 +1,592 @@
+---
+title: "Assignment 4: Building Features, Watching What Happens"
+subtitle: "MUSA 5080 · Philadelphia tract poverty rates"
+author: "Lang Tao"
+format:
+  html:
+    toc: true
+    code-fold: show
+    code-tools: true
+    embed-resources: true
+execute:
+  warning: false
+  message: false
+freeze: false
+---
+
+## Part 0: Setup
+
+This assignment predicts Philadelphia tract poverty rates using the 2019–2023 ACS. I start with four ACS predictors, add spatial features from 2023, and compare models using the same observations and ten-fold cross-validation.
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(tidycensus)
+library(sf)
+library(caret)
+
+# Figure size for the report.
+knitr::opts_chunk$set(fig.width = 7, fig.height = 5, dpi = 140)
+options(timeout = 240, tigris_use_cache = FALSE)
+```
+
+### The cross-validation helper
+
+I use the helper supplied in the assignment. Resetting the seed with the same response and the same rows makes the folds comparable across models.
+
+```{r}
+#| label: cv-helper
+ctrl <- trainControl(method = "cv", number = 10)
+
+cv_rmse <- function(formula, data) {
+  df <- if (inherits(data, "sf")) st_drop_geometry(data) else data
+  vars <- all.vars(formula)
+  bad <- vars[sapply(vars, function(v) any(is.na(df[[v]])))]
+  if (length(bad) > 0) {
+    stop("These variables have NAs: ", paste(bad, collapse = ", "),
+         ". Fill them or choose another variable (Rule 1: don't drop rows).")
+  }
+  set.seed(5080)
+  fit <- train(formula, data = df, method = "lm", trControl = ctrl)
+  fit$results$RMSE
+}
+```
+
+### The model log
+
+```{r}
+#| label: log-start
+model_log <- tibble(
+  model = character(), added = character(),
+  cv_rmse = numeric(), notes = character()
+)
+```
+
+## Part 1: Choose your outcome
+
+### 1A: Pull your outcome and baseline predictors
+
+My outcome is the percentage of people below poverty among people for whom poverty status is determined. The predictors are median household income, bachelor's-degree attainment, renter share, and median age. None is calculated from the poverty numerator or denominator.
+
+```{r}
+#| label: pull
+# Load the saved ACS data.
+if (file.exists("data/assignment4/acs_2023_raw.rds")) {
+  philly_tracts <- readRDS("data/assignment4/acs_2023_raw.rds")
+} else {
+  philly_tracts <- get_acs(
+    geography = "tract", state = "PA", county = "Philadelphia",
+    variables = c(
+      total_pop = "B01003_001",
+      poverty_universe = "B17001_001",
+      below_poverty = "B17001_002",
+      med_inc = "B19013_001",
+      median_age = "B01002_001",
+      occupied = "B25003_001", renter = "B25003_003",
+      edu_total = "B15003_001",
+      ba = "B15003_022", ma = "B15003_023",
+      professional = "B15003_024", doctorate = "B15003_025"
+    ),
+    year = 2023, survey = "acs5", output = "wide",
+    geometry = TRUE, progress_bar = FALSE
+  )
+}
+philly_tracts <- philly_tracts %>%
+  st_transform(2272) %>%
+  st_make_valid()
+```
+
+```{r}
+#| label: build-outcome
+philly_tracts <- philly_tracts %>%
+  mutate(
+    y = if_else(poverty_universeE > 0,
+                below_povertyE / poverty_universeE * 100, NA_real_),
+    y_moe = if_else(poverty_universeE > 0,
+      moe_prop(below_povertyE, poverty_universeE,
+               below_povertyM, poverty_universeM) * 100, NA_real_),
+    y_cv = if_else(y > 0, (y_moe / 1.645) / y * 100, NA_real_),
+    med_inc_10k = med_incE / 10000,
+    pct_ba = if_else(edu_totalE > 0,
+      (baE + maE + professionalE + doctorateE) / edu_totalE * 100,
+      NA_real_),
+    pct_renter = if_else(occupiedE > 0,
+                        renterE / occupiedE * 100, NA_real_),
+    median_age = median_ageE,
+    reliability = case_when(
+      is.na(y) ~ "Outcome unavailable",
+      is.na(y_cv) ~ "CV undefined",
+      y_cv < 12 ~ "High",
+      y_cv <= 40 ~ "Moderate",
+      TRUE ~ "Low"
+    )
+  )
+```
+
+Here, `y` is measured in percent and `y_moe` in percentage points. Income is in $10,000 units, age is in years, and the two share predictors are percentages.
+
+### 1B: Is it reliable enough to model?
+
+```{r}
+#| label: reliability
+#| fig-cap: "Available tract poverty-rate estimates, ACS 2019–2023."
+reliability_table <- philly_tracts %>%
+  st_drop_geometry() %>%
+  count(reliability)
+knitr::kable(reliability_table)
+
+ggplot(philly_tracts %>% filter(!is.na(y)), aes(x = y)) +
+  geom_histogram(bins = 30, fill = "steelblue") +
+  theme_minimal() +
+  labs(x = "Poverty rate (%)", y = "Tracts",
+       title = "Distribution of tract poverty estimates")
+```
+
+**Answer:** A planning agency could use this outcome to identify places needing further assessment and services. Of 408 tracts, 19 have no defined poverty rate, and 59 of the 389 available estimates have low reliability (15.2%), below the template's approximate one-third warning threshold. Most estimates have moderate reliability, so the outcome is usable for this exercise but should not be treated as certain.
+
+### 1C: Decide which tracts to model
+
+```{r}
+#| label: filter
+tracts <- philly_tracts %>%
+  filter(
+    total_popE > 0,
+    !is.na(y),
+    !is.na(med_inc_10k), med_inc_10k > 0,
+    !is.na(pct_ba), !is.na(pct_renter), !is.na(median_age)
+  ) %>%
+  arrange(GEOID)
+
+n_initial <- nrow(philly_tracts)
+n_model <- nrow(tracts)
+excluded_tracts <- philly_tracts %>%
+  st_drop_geometry() %>%
+  filter(!GEOID %in% tracts$GEOID) %>%
+  select(GEOID, NAME, total_popE, poverty_universeE,
+         y, med_inc_10k, pct_ba, pct_renter, median_age)
+
+knitr::kable(tibble(initial = n_initial, retained = n_model,
+                    excluded = n_initial - n_model))
+```
+
+**Answer:** I retain `r n_model` tracts and exclude `r n_initial - n_model` at this step only: 19 have undefined poverty rates and eight more lack required baseline values. Some excluded tracts have no residents, but others are populated places with missing ACS estimates. One zero-poverty estimate has undefined relative CV; I keep that tract in the models and omit it only from the later CV scatterplot.
+
+## Part 2: Baseline model
+
+### 2A: Look first
+
+```{r}
+#| label: look
+#| layout-ncol: 2
+#| fig-cap:
+#|   - "Poverty rate versus median income; line is an unadjusted linear fit."
+#|   - "Poverty rate versus bachelor's-degree attainment among adults 25+."
+#|   - "Poverty rate versus renter share among occupied housing units."
+#|   - "Poverty rate versus median age."
+ggplot(tracts, aes(med_inc_10k, y)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_minimal() +
+  labs(x = "Median household income ($10,000s)", y = "Poverty rate (%)")
+
+ggplot(tracts, aes(pct_ba, y)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_minimal() +
+  labs(x = "Adults 25+ with BA or higher (%)", y = "Poverty rate (%)")
+
+ggplot(tracts, aes(pct_renter, y)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_minimal() +
+  labs(x = "Renter-occupied units (%)", y = "Poverty rate (%)")
+
+ggplot(tracts, aes(median_age, y)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(method = "lm", se = FALSE, color = "red") +
+  theme_minimal() +
+  labs(x = "Median age (years)", y = "Poverty rate (%)")
+```
+
+The income relationship appears curved, making a log-income model worth testing later. These are neighborhood associations, not individual or causal effects.
+
+### 2B: Fit and log
+
+```{r}
+#| label: m1
+f1 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age
+m1 <- lm(f1, data = tracts)
+summary(m1)
+
+model_log <- model_log %>%
+  add_row(model = "m1", added = "ACS baseline",
+          cv_rmse = cv_rmse(f1, tracts),
+          notes = "Income, education, renter share, and age")
+knitr::kable(model_log, digits = 3)
+```
+
+**Answer:** On held-out tracts, the baseline model's ten-fold CV RMSE is about **`r round(model_log$cv_rmse[1], 2)` percentage points**. RMSE is a measure of prediction-error size, not a prediction interval.
+
+### 2C: Where is the baseline wrong?
+
+```{r}
+#| label: resid-map-1
+#| fig-cap: "Baseline fitted residuals: positive/red indicates underprediction and negative/blue indicates overprediction."
+tracts <- tracts %>% mutate(resid_m1 = residuals(m1))
+baseline_map <- ggplot(tracts) +
+  geom_sf(aes(fill = resid_m1), color = NA) +
+  scale_fill_gradient2(
+    low = "#2166ac", mid = "grey95", high = "#b2182b", midpoint = 0
+  ) +
+  theme_void() +
+  labs(title = "Baseline model: where it is wrong",
+       subtitle = "Red = actual above predicted",
+       fill = "Residual (pp)")
+baseline_map
+```
+
+**Answer:** Several central/north-central tracts have large positive residuals, meaning the model underpredicts their poverty rates. The baseline may miss local conditions and differences in location. I therefore test reported residential burglary, shooting victim records, and distance from City Hall. The event layers may capture neighborhood conditions, but their associations do not establish that crime causes poverty.
+
+## Part 3: Getting data from Philadelphia's open data portal
+
+### Carto helper and the two layers
+
+I use residential burglary incidents and shooting victim records dated in 2023. A shooting-victim row represents a victim, not necessarily a separate incident. The SQL filters the dates before download.
+
+```{r}
+#| label: carto-helper
+carto_get <- function(sql) {
+  url <- paste0(
+    "https://phl.carto.com/api/v2/sql?format=GeoJSON&q=",
+    URLencode(sql, reserved = TRUE)
+  )
+  st_read(url, quiet = TRUE)
+}
+```
+
+```{r}
+#| label: my-layers
+burglary_sql <- paste(
+  "SELECT cartodb_id, the_geom, dispatch_date, text_general_code",
+  "FROM incidents_part1_part2",
+  "WHERE dispatch_date >= '2023-01-01' AND dispatch_date < '2024-01-01'",
+  "AND text_general_code = 'Burglary Residential'"
+)
+shooting_sql <- paste(
+  "SELECT cartodb_id, the_geom, date_ FROM shootings",
+  "WHERE date_ >= '2023-01-01' AND date_ < '2024-01-01'"
+)
+
+# Read the saved 2023 event data.
+if (file.exists("data/assignment4/residential_burglary_2023.geojson")) {
+  burglary_raw <- st_read("data/assignment4/residential_burglary_2023.geojson", quiet = TRUE)
+} else {
+  burglary_raw <- carto_get(burglary_sql)
+}
+if (file.exists("data/assignment4/shooting_victims_2023.geojson")) {
+  shooting_raw <- st_read("data/assignment4/shooting_victims_2023.geojson", quiet = TRUE)
+} else {
+  shooting_raw <- carto_get(shooting_sql)
+}
+
+burglary <- burglary_raw %>%
+  filter(!st_is_empty(.)) %>%
+  st_transform(st_crs(tracts))
+shooting <- shooting_raw %>%
+  filter(!st_is_empty(.)) %>%
+  st_transform(st_crs(tracts))
+
+layer_audit <- tibble(
+  layer = c("Residential burglary incidents", "Shooting victim records"),
+  downloaded = c(nrow(burglary_raw), nrow(shooting_raw)),
+  missing_location = c(nrow(burglary_raw) - nrow(burglary),
+                       nrow(shooting_raw) - nrow(shooting))
+)
+knitr::kable(layer_audit)
+```
+
+**Answer:** The two layers measure reported events and exposure that are absent from the four ACS predictors. There are `r layer_audit$missing_location[1]` burglary records and `r layer_audit$missing_location[2]` victim record without usable locations. The records were downloaded retrospectively, so they are historical events rather than a saved snapshot of everything known in 2023.
+
+## Part 4: Building spatial features
+
+### 4A: Counting
+
+```{r}
+#| label: count
+tracts <- tracts %>%
+  mutate(n_burglary = lengths(st_intersects(., burglary)))
+f2 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + n_burglary
+m2 <- lm(f2, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m2", added = "Burglary count",
+          cv_rmse = cv_rmse(f2, tracts), notes = "2023 records per tract")
+```
+
+### 4B: Density
+
+```{r}
+#| label: density
+tracts <- tracts %>%
+  mutate(
+    area_sqmi = as.numeric(st_area(.)) / 27878400,
+    burglary_per_sqmi = n_burglary / area_sqmi,
+    n_shooting = lengths(st_intersects(., shooting)),
+    shooting_per_1k = n_shooting / total_popE * 1000
+  )
+
+f3 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + burglary_per_sqmi
+m3 <- lm(f3, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m3", added = "Burglary density",
+          cv_rmse = cv_rmse(f3, tracts), notes = "Records per square mile")
+
+f4 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + shooting_per_1k
+m4 <- lm(f4, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m4", added = "Shooting victim rate",
+          cv_rmse = cv_rmse(f4, tracts), notes = "Victim records per 1,000 residents")
+
+knitr::kable(tracts %>% st_drop_geometry() %>%
+  arrange(desc(shooting_per_1k)) %>%
+  select(GEOID, total_popE, n_shooting, shooting_per_1k) %>%
+  head(5), digits = 2, caption = "Check the largest per-capita rates")
+```
+
+Counts give zero to tracts without recorded events. Density accounts for area, while the victim rate accounts for population. The population denominator still requires care in small tracts.
+
+### 4C: Distance to the nearest event
+
+```{r}
+#| label: nearest
+tract_pts <- st_point_on_surface(tracts)
+nearest_idx <- st_nearest_feature(tract_pts, shooting)
+tracts <- tracts %>%
+  mutate(dist_shooting_mi = as.numeric(st_distance(
+    tract_pts, shooting[nearest_idx, ], by_element = TRUE
+  )) / 5280)
+
+f5 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + dist_shooting_mi
+m5 <- lm(f5, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m5", added = "Nearest shooting distance",
+          cv_rmse = cv_rmse(f5, tracts), notes = "Straight-line miles")
+```
+
+### 4D: Distance to one place
+
+```{r}
+#| label: city-hall
+city_hall <- st_sfc(st_point(c(-75.1636, 39.9526)), crs = 4326) %>%
+  st_transform(st_crs(tracts))
+tracts <- tracts %>%
+  mutate(dist_ch_mi = as.numeric(st_distance(tract_pts, city_hall)) / 5280)
+
+f6 <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + dist_ch_mi
+m6 <- lm(f6, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m6", added = "City Hall distance",
+          cv_rmse = cv_rmse(f6, tracts), notes = "Straight-line miles")
+```
+
+The CRS is EPSG 2272, measured in feet. Dividing by 5,280 converts distance to miles. These are distances from an interior representative point, not household-weighted travel times.
+
+### 4E: Compare the spatial features
+
+```{r}
+#| label: spatial-log
+knitr::kable(model_log, digits = 3)
+spatial_best <- model_log %>%
+  filter(model != "m1") %>%
+  slice_min(cv_rmse, n = 1, with_ties = FALSE)
+```
+
+**Answer:** The best individual spatial addition is **`r spatial_best$added`**, with RMSE `r round(spatial_best$cv_rmse, 2)` pp compared with `r round(model_log$cv_rmse[1], 2)` pp for the baseline. Raw counts and nearest-event distance provide relatively small changes; they may overlap with existing predictors or reflect noisy reporting. A plausible explanation for a feature is not sufficient evidence that it improves prediction.
+
+## Part 5: Transforming features
+
+### 5A: Logs, for skewed predictors
+
+The income scatterplot suggests a curved relationship. I compare linear income with log income, and test `log1p()` for burglary density because density can be zero.
+
+```{r}
+#| label: log-look
+#| layout-ncol: 2
+#| fig-cap:
+#|   - "Median income before transformation."
+#|   - "Median income after a natural-log transformation."
+#|   - "Residential burglary density before transformation."
+#|   - "Residential burglary density after log1p, which permits zero counts."
+ggplot(tracts, aes(med_inc_10k)) +
+  geom_histogram(bins = 30, fill = "steelblue") + theme_minimal() +
+  labs(x = "Income ($10,000s)", y = "Tracts")
+ggplot(tracts, aes(log(med_inc_10k))) +
+  geom_histogram(bins = 30, fill = "steelblue") + theme_minimal() +
+  labs(x = "log income", y = "Tracts")
+ggplot(tracts, aes(burglary_per_sqmi)) +
+  geom_histogram(bins = 30, fill = "steelblue") + theme_minimal() +
+  labs(x = "Burglary records per square mile", y = "Tracts")
+ggplot(tracts, aes(log1p(burglary_per_sqmi))) +
+  geom_histogram(bins = 30, fill = "steelblue") + theme_minimal() +
+  labs(x = "log(1 + burglary density)", y = "Tracts")
+```
+
+```{r}
+#| label: log-models
+f_log <- y ~ log(med_inc_10k) + pct_ba + pct_renter + median_age
+m_log <- lm(f_log, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m7", added = "Log income",
+          cv_rmse = cv_rmse(f_log, tracts), notes = "Replace the linear income term")
+
+f_log_density <- y ~ med_inc_10k + pct_ba + pct_renter + median_age +
+  log1p(burglary_per_sqmi)
+m_log_density <- lm(f_log_density, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m8", added = "Log1p burglary density",
+          cv_rmse = cv_rmse(f_log_density, tracts), notes = "Allows zero counts")
+```
+
+### 5B: Squared terms, for curves
+
+```{r}
+#| label: squared-model
+#| fig-cap: "Exploratory quadratic fit between poverty rate and distance from City Hall; this is not an adjusted causal relationship."
+ggplot(tracts, aes(dist_ch_mi, y)) +
+  geom_point(alpha = 0.4) +
+  geom_smooth(method = "lm", formula = y ~ x + I(x^2),
+              se = FALSE, color = "red") +
+  theme_minimal() +
+  labs(x = "Distance from City Hall (miles)", y = "Poverty rate (%)")
+
+f_sq <- y ~ med_inc_10k + pct_ba + pct_renter + median_age +
+  dist_ch_mi + I(dist_ch_mi^2)
+m_sq <- lm(f_sq, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m9", added = "Squared City Hall distance",
+          cv_rmse = cv_rmse(f_sq, tracts),
+          notes = "Compare with m6 to isolate the squared term")
+```
+
+### 5C: Categorical variables
+
+```{r}
+#| label: categorical-model
+tracts <- tracts %>%
+  mutate(
+    ring = case_when(
+      dist_ch_mi < 2 ~ "Core",
+      dist_ch_mi < 5 ~ "Inner",
+      TRUE ~ "Outer"
+    ),
+    ring = factor(ring, levels = c("Core", "Inner", "Outer"))
+  )
+knitr::kable(tracts %>% st_drop_geometry() %>% count(ring))
+
+f_cat <- y ~ med_inc_10k + pct_ba + pct_renter + median_age + ring
+m_cat <- lm(f_cat, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m10", added = "City Hall distance categories",
+          cv_rmse = cv_rmse(f_cat, tracts), notes = "Core is the reference")
+```
+
+### 5D: Which transformation helped?
+
+```{r}
+#| label: transformation-log
+knitr::kable(model_log %>% filter(model %in% c("m7", "m8", "m9", "m10")),
+             digits = 3)
+```
+
+**Answer:** Logging income produces the largest improvement among these transformations, giving RMSE `r round(model_log$cv_rmse[model_log$model == "m7"], 2)` pp. In the categorical model, Outer tracts have a predicted poverty rate about `r round(abs(coef(m_cat)["ringOuter"]), 2)` pp lower than Core tracts, holding the four baseline variables constant. Core is the reference category; this coefficient belongs to m10, not the final model.
+
+## Part 6: Your final model
+
+I compare a combined model with a simpler version that omits burglary density and nearest-event distance. The decision uses CV RMSE rather than coefficient p-values.
+
+```{r}
+#| label: combined-model
+f_combined <- y ~ log(med_inc_10k) + pct_ba + pct_renter + median_age +
+  log1p(burglary_per_sqmi) + shooting_per_1k + dist_shooting_mi +
+  dist_ch_mi + I(dist_ch_mi^2)
+m_combined <- lm(f_combined, data = tracts)
+model_log <- model_log %>%
+  add_row(model = "m11", added = "Combined spatial and transformed predictors",
+          cv_rmse = cv_rmse(f_combined, tracts),
+          notes = "Compare with the reduced final model")
+```
+
+```{r}
+#| label: final
+f_final <- y ~ log(med_inc_10k) + pct_ba + pct_renter + median_age +
+  shooting_per_1k + dist_ch_mi + I(dist_ch_mi^2)
+m_final <- lm(f_final, data = tracts)
+summary(m_final)
+model_log <- model_log %>%
+  add_row(model = "final", added = "Log income, victim rate, and curved distance",
+          cv_rmse = cv_rmse(f_final, tracts),
+          notes = "Omit burglary density and nearest-event distance")
+
+baseline_rmse <- model_log$cv_rmse[model_log$model == "m1"]
+final_rmse <- model_log$cv_rmse[model_log$model == "final"]
+improvement_pct <- (1 - final_rmse / baseline_rmse) * 100
+knitr::kable(model_log, digits = 3, caption = "Complete model log")
+```
+
+The final model's RMSE is **`r round(final_rmse, 2)` pp**, compared with **`r round(baseline_rmse, 2)` pp** for the baseline, an improvement of **`r round(improvement_pct, 1)`%**. Small differences between similar models may be unstable. These same folds were used to select the model, so the score is not an independent estimate of future performance.
+
+### Where is the final model wrong?
+
+```{r}
+#| label: resid-map-2
+#| layout-ncol: 2
+#| fig-cap:
+#|   - "Baseline fitted residuals on the common scale."
+#|   - "Final fitted residuals on the same scale; remaining red areas are underpredicted."
+tracts <- tracts %>% mutate(resid_final = residuals(m_final))
+map_limit <- max(abs(c(tracts$resid_m1, tracts$resid_final)))
+
+ggplot(tracts) +
+  geom_sf(aes(fill = resid_m1), color = NA) +
+  scale_fill_gradient2(
+    low = "#2166ac", mid = "grey95", high = "#b2182b",
+    midpoint = 0, limits = c(-map_limit, map_limit)
+  ) + theme_void() +
+  labs(title = "Baseline residuals", fill = "Residual (pp)")
+
+ggplot(tracts) +
+  geom_sf(aes(fill = resid_final), color = NA) +
+  scale_fill_gradient2(
+    low = "#2166ac", mid = "grey95", high = "#b2182b",
+    midpoint = 0, limits = c(-map_limit, map_limit)
+  ) + theme_void() +
+  labs(title = "Final residuals", fill = "Residual (pp)")
+```
+
+**Answer:** The final map has smaller errors in many tracts, but several central/north-central underpredictions remain. Tract 195.02's fitted residual falls from `r round(tracts$resid_m1[tracts$GEOID == "42101019502"], 2)` to `r round(tracts$resid_final[tracts$GEOID == "42101019502"], 2)` pp. Both maps use the same scale. They show fitted errors as requested by the template, not held-out errors or a formal test of spatial clustering.
+
+### Are the biggest misses in the least reliable tracts?
+
+```{r}
+#| label: fog
+#| fig-cap: "Outcome CV versus absolute final fitted residual; the smooth trend does not identify the share of error caused by sampling noise."
+ggplot(tracts %>% filter(is.finite(y_cv)), aes(y_cv, abs(resid_final))) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(se = FALSE) +
+  theme_minimal() +
+  labs(x = "CV of the poverty-rate estimate (%)",
+       y = "Absolute fitted residual (pp)")
+```
+
+**Answer:** The plot does not show a clear steady increase in error as CV rises. Several large errors occur at moderate CV values. Sampling uncertainty may contribute, but this plot cannot tell us how much error it explains.
+
+The linear model also produces `r sum(fitted(m_final) < 0)` negative fitted rates, which are impossible for poverty. I retain and report these values rather than silently clipping them. A prediction model for actual service allocation would need additional work.
+
+## Part 7: Reflection 
+
+I used income, education, renter share, and median age to predict poverty. The baseline RMSE was 8.95 percentage points. Taking the log of income gave the biggest improvement, reducing RMSE to 7.77. City Hall distance was the best individual spatial feature. Burglary counts helped less than expected, probably because large tracts can have more events. The final model had an RMSE of 7.58. Adding more variables did not always make the model better.
+
+The coefficient for median age was -0.288. Holding the other variables the same, a one-year higher median age is associated with 0.288 percentage points lower poverty. For prediction, a tract with a median age five years higher has a predicted poverty rate about 1.44 points lower. This does not mean that age causes poverty to fall.
+
+The final map still shows some underprediction in central/north-central Philadelphia. I would next add information about nearby jobs and how often buses and trains run. Historical employment data and SEPTA schedules could help with this. Distance from City Hall does not tell us whether residents can reach jobs easily.
+
+The last plot does not show that less reliable estimates always have bigger errors. Some error may come from the ACS survey, but the plot cannot tell us how much. There are also 8 negative fitted poverty rates. Since real poverty rates cannot be negative, I would not use this model for policy decisions without more checking.
